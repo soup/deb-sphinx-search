@@ -1,7 +1,7 @@
 <?php
 
 //
-// $Id: test.php 1343 2008-07-08 21:28:20Z shodan $
+// $Id: test.php 1559 2008-11-11 17:57:35Z shodan $
 //
 
 require ( "sphinxapi.php" );
@@ -30,17 +30,21 @@ if ( !is_array($_SERVER["argv"]) || empty($_SERVER["argv"]) )
 	print ( "-e, --extended\t\tuse 'extended query' matching mode\n" );
 	print ( "-ph,--phrase\t\tuse 'exact phrase' matching mode\n" );
 	print ( "-f, --filter <ATTR>\tfilter by attribute 'ATTR' (default is 'group_id')\n" );
+	print ( "-fr,--filterrange <ATTR> <MIN> <MAX>\n\t\t\tadd specified range filter\n" );
 	print ( "-v, --value <VAL>\tadd VAL to allowed 'group_id' values list\n" );
 	print ( "-g, --groupby <EXPR>\tgroup matches by 'EXPR'\n" );
 	print ( "-gs,--groupsort <EXPR>\tsort groups by 'EXPR'\n" );
 	print ( "-d, --distinct <ATTR>\tcount distinct values of 'ATTR''\n" );
 	print ( "-l, --limit <COUNT>\tretrieve COUNT matches (default: 20)\n" );
+	print ( "--select <EXPRLIST>\tuse 'EXPRLIST' as select-list (default: *)\n" );
 	exit;
 }
 
 $args = array();
 foreach ( $_SERVER["argv"] as $arg )
 	$args[] = $arg;
+
+$cl = new SphinxClient ();
 
 $q = "";
 $mode = SPH_MATCH_ALL;
@@ -55,6 +59,7 @@ $distinct = "";
 $sortby = "";
 $limit = 20;
 $ranker = SPH_RANK_PROXIMITY_BM25;
+$select = "";
 for ( $i=0; $i<count($args); $i++ )
 {
 	$arg = $args[$i];
@@ -75,6 +80,8 @@ for ( $i=0; $i<count($args); $i++ )
 	else if ( $arg=="-gs"|| $arg=="--groupsort" )	$groupsort = $args[++$i];
 	else if ( $arg=="-d" || $arg=="--distinct" )	$distinct = $args[++$i];
 	else if ( $arg=="-l" || $arg=="--limit" )		$limit = (int)$args[++$i];
+	else if ( $arg=="--select" )					$select = $args[++$i];
+	else if ( $arg=="-fr"|| $arg=="--filterrange" )	$cl->SetFilterRange ( $args[++$i], $args[++$i], $args[++$i] );
 	else if ( $arg=="-r" )
 	{
 		$arg = strtolower($args[++$i]);
@@ -90,7 +97,6 @@ for ( $i=0; $i<count($args); $i++ )
 // do query
 ////////////
 
-$cl = new SphinxClient ();
 $cl->SetServer ( $host, $port );
 $cl->SetConnectTimeout ( 1 );
 $cl->SetWeights ( array ( 100, 1 ) );
@@ -100,6 +106,7 @@ if ( $groupby )				$cl->SetGroupBy ( $groupby, SPH_GROUPBY_ATTR, $groupsort );
 if ( $sortby )				$cl->SetSortMode ( SPH_SORT_EXTENDED, $sortby );
 if ( $sortexpr )			$cl->SetSortMode ( SPH_SORT_EXPR, $sortexpr );
 if ( $distinct )			$cl->SetGroupDistinct ( $distinct );
+if ( $select )				$cl->SetSelect ( $select );
 if ( $limit )				$cl->SetLimits ( 0, $limit, ( $limit>1000 ) ? $limit : 1000 );
 $cl->SetRankingMode ( $ranker );
 $cl->SetArrayResult ( true );
@@ -152,7 +159,7 @@ if ( $res===false )
 }
 
 //
-// $Id: test.php 1343 2008-07-08 21:28:20Z shodan $
+// $Id: test.php 1559 2008-11-11 17:57:35Z shodan $
 //
 
 ?>

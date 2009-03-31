@@ -1,8 +1,11 @@
 <?php
 
 //
-// $Id$
+// $Id: helpers.inc 1548 2008-11-03 23:32:42Z shodan $
 //
+
+ini_set ( "display_errors", 1 );
+ini_set ( "error_reporting", E_ALL | E_STRICT );
 
 require_once ( "../api/sphinxapi.php" );
 
@@ -70,6 +73,12 @@ function StartSearchd ( $config_file, $error_file, $pidfile, &$error )
 
 	for ( $i=0; $i<$action_retries && !file_exists($pidfile); $i++ )
 		usleep ( $action_wait_timeout );
+
+	if ( !file_exists($pidfile) )
+	{
+		$error = "PID file ($pidfile) was not created";
+		return 1;
+	}
 
 	if ( $retval == 0 )
 	{
@@ -170,6 +179,7 @@ class SphinxConfig
 	private $_subtestcount;
 	private $_results;
 	private $_results_model;
+	private $_prereqs;
 	private $_config;				///< config DOM node
 
 
@@ -204,6 +214,7 @@ class SphinxConfig
 	function DB_Create ()			{ return $this->_db_create; }
 	function DB_Insert ()			{ return $this->_db_insert; }
 	function NumAgents ()			{ return $this->_num_agents; }
+	function Requires ( $name )		{ return isset($this->_prereqs[$name]); }
 	function IsQueryTest ()			{ return strlen ( $this->_custom_test ) == 0;	}
 
 
@@ -311,6 +322,34 @@ class SphinxConfig
 	}
 
 
+	function ParseRange ( $range )
+	{
+		if ( !$range )
+			return false;
+
+		$values = explode ( ' ', $range );
+		if ( count($values) != 2 )
+		{
+			printf ( "ERROR: malformed range attribute: '%s'\n", $range );
+			return false;
+		}
+
+		return array ( 'min' => $values[0], 'max' => $values[1] );
+	}
+
+	function ParseIndexWeights ( $weights )
+	{
+		if ( !$weights )
+			return false;
+
+		$result = array();
+		preg_match_all ( '/([^\s]+):(\d+)/', $weights, $matches, PREG_SET_ORDER  );
+		foreach ( $matches as $match )
+			$result [ $match[1] ] = (int)$match[2];
+
+		return $result;
+	}
+
 	function Load ( $config_file )
 	{
 		// load the file
@@ -384,7 +423,8 @@ class SphinxConfig
 
 				// parse filter
 				$res["filter"] = $q->getAttribute("filter");
-				$res["filtervalue"] = $q->getAttribute("filtervalue" );
+				$res["filter_value"] = $q->getAttribute("filter_value" );
+				$res["filter_range"] = $this->ParseRange ( $q->getAttribute("filter_range" ) );
 
 				// parse sort mode and get clause
 				$sortmode = 0;
@@ -431,6 +471,9 @@ class SphinxConfig
 
 				$res["resarray"] = $q->getAttribute("resarray");
 				$res["index"] = $q->getAttribute("index");
+				$res["select"] = $q->getAttribute("select");
+				$res["id_range"] = $this->ParseRange ( $q->getAttribute("id_range") );
+				$res["index_weights"] = $this->ParseIndexWeights ( $q->getAttribute("index_weights") );
 
 				// add query
 				$this->_queries[] = $res;
@@ -462,6 +505,12 @@ class SphinxConfig
 		$this->_name			= GetFirstChildValue ( $xml, "name" );
 		$this->_query_settings	= GetFirstChildValue ( $xml, "query_settings" );
 		$this->_num_agents		= GetFirstChildValue ( $xml, "num_agents", 1 );
+
+		$this->_prereqs = array();
+		$prereqs = GetFirstChild ( $xml, "requires", false );
+		if ( $prereqs )
+			foreach ( ChildrenArray ( $prereqs ) as $node )
+				$this->_prereqs [ $node->nodeName ] = 1;
 
 		// precalc subtests count
 		$this->_subtestcount = 1;
@@ -511,11 +560,24 @@ class SphinxConfig
 					if ( @$qinfo["mode"] )		$cl->SetMatchMode ( $qinfo["mode"] );
 					if ( @$qinfo["ranker"] )	$cl->SetRankingMode ( $qinfo["ranker"] );
 					if ( @$qinfo["sortmode"] )	$cl->SetSortMode ( $qinfo["sortmode"], $qinfo["sortby"] );
-					if ( @$qinfo["filter"] )	$cl->SetFilter ( $qinfo["filter"], array ( $qinfo["filtervalue"] ) );
 					if ( @$qinfo["groupattr"] )	$cl->SetGroupBy ( $qinfo["groupattr"], $qinfo["groupfunc"], $qinfo["groupsort"] );
 					if ( @$qinfo["groupdistinct"] )	$cl->SetGroupDistinct ( $qinfo["groupdistinct"] );
 					if ( @$qinfo["resarray"] )	$cl->SetArrayResult ( true );
+					if ( @$qinfo["select"] )	$cl->SetSelect ( $qinfo["select"] );
+					if ( @$qinfo["id_range"] )	$cl->SetIDRange ( $qinfo["id_range"]["min"], $qinfo["id_range"]["max"] );
 					if ( @$qinfo["index"] )		$my_index = $qinfo["index"];
+					if ( @$qinfo["index_weights"] ) $cl->SetIndexWeights ( $qinfo["index_weights"] );
+					if ( @$qinfo["filter"] )
+					{
+						$name = $qinfo["filter"];
+						if ( @$qinfo["filter_value"] )
+							$cl->SetFilter ( $name, array ( $qinfo["filter_value"] ) );
+						elseif ( @$qinfo["filter_range"] )
+						{
+							$range = $qinfo["filter_range"];
+							$cl->SetFilterRange ( $name, $range['min'], $range['max'] );
+						}
+					}
 
 	            	$results = $cl->Query ( $query, $my_index );
 					if ( @$qinfo["resarray"] )
@@ -532,9 +594,13 @@ class SphinxConfig
 					$bOk = TRUE;
 					$results ["query"] = $query;
         			array_push ( $query_results, $results );
-            	}
-				else
+            	} else
+				{
+					if ( !$cl->IsConnectError() )
+						break;
+
 					usleep ( $action_wait_timeout );
+				}
 			}
 
 			if ( !$bOk )
@@ -593,6 +659,24 @@ class SphinxConfig
 	}
 
 
+	function FixKeys ( $v )
+	{
+		if ( is_array($v) )
+		{
+			$result = array();
+			foreach ( $v as $key=>$value )
+			{
+				if ( $key==PHP_INT_MAX || $key==-PHP_INT_MAX-1 )
+					$key = (int)$key;
+				$result[$key] = $this->FixKeys ( $value );
+			}
+			return $result;
+		}
+		else
+			return $v;
+	}
+
+
 	function LoadModel ( $filename )
 	{
 		if ( ! IsModelGenMode () )
@@ -604,7 +688,7 @@ class SphinxConfig
 			if ( ! $contents )
 				return FALSE;
 
-			$this->_results_model = unserialize ( $contents );
+			$this->_results_model = $this->FixKeys ( unserialize ( $contents ) );
 		}
 
 		return TRUE;
@@ -613,9 +697,27 @@ class SphinxConfig
 
 	function CompareToModel ()
 	{
-		return $this->CompareResults ( $this->_results, $this->_results_model [$this->SubtestNo ()] );
+		return $this->CompareResults ( $this->FixKeys ( $this->_results ), $this->_results_model [$this->SubtestNo ()] );
 	}
 
+
+	function CompareResultSetFixup ( &$set )
+	{
+		if ( !is_array($set) )
+			return;
+
+		unset ( $set["time"] );
+		unset ( $set["warning"] );
+		unset ( $set["status"] );
+		unset ( $set["fields"] );
+	}
+
+	function CompareResultSets ( $set1, $set2 )
+	{
+		$this->CompareResultSetFixup ( $set1 );
+		$this->CompareResultSetFixup ( $set2 );
+		return $set1==$set2;
+	}
 
 	function CompareResults ( $query1, $query2 )
 	{
@@ -623,24 +725,10 @@ class SphinxConfig
 			return false;
 
 		for ( $i=0; $i<count($query1); $i++ )
-		{
-			if ( is_array($query1[$i]) )
-			{
-				unset ( $query1[$i]["time"] );
-				unset ( $query1[$i]["warning"] );
-				unset ( $query1[$i]["status"] );
-				unset ( $query1[$i]["fields"] );
-			}
-			if ( is_array($query2[$i]) )
-			{
-				unset ( $query2[$i]["time"] );
-				unset ( $query2[$i]["warning"] );
-				unset ( $query2[$i]["status"] );
-				unset ( $query2[$i]["fields"] );
-			}
-		}
+			if ( !$this->CompareResultSets ( $query1[$i], $query2[$i] ) )
+				return false;
 
-		return $query1==$query2;
+		return true;
 	}
 
 
@@ -748,7 +836,7 @@ class SphinxConfig
 							$attrtmp = $docinfo ["attrs"][$attribute];
 							if ( is_array ( $attrtmp ) )
 							{
-                   				$str .= " $attribute=";
+								$str .= " $attribute=";
 								foreach ( $attrtmp as $valuetmp )
 									$str .= " $valuetmp";
 							}
@@ -801,7 +889,7 @@ class SphinxConfig
 
 		foreach ( $this->_results_model [ $this->SubtestNo() ] as $ref )
 		{
-			if ( $ref==$this->_results[$nquery] )
+			if ( $this->CompareResultSets ( $ref, $this->_results[$nquery] ) )
 			{
 				$nquery++;
 				continue;
@@ -809,7 +897,6 @@ class SphinxConfig
 
 			$result_f_cur = $this->FormatResultSet ( $nquery + 1, $this->_results[$nquery] );
 			$result_f_ref = $this->FormatResultSet ( $nquery + 1, $ref );
-
 			file_put_contents ( "current", $result_f_cur );
 			file_put_contents ( "reference", $result_f_ref );
 			system ( "diff --unified=3 reference current > diffed.txt" );
@@ -827,13 +914,13 @@ class SphinxConfig
 	}
 
 
-	function WriteConfig ( $filename )
+	function WriteConfig ( $filename, $agentid )
 	{
 		$fp = fopen ( $filename, 'w' );
 		if ( !$fp )
 			return FALSE;
 
-		$this->Dump ( $this->_config, $fp, false );
+		$this->Dump ( $this->_config, $fp, false, $agentid );
 	
 		fclose ( $fp );
 	
@@ -843,7 +930,7 @@ class SphinxConfig
 
 	function WriteDiff ( $fp )
 	{
-		$this->Dump ( $this->_config, $fp, true );
+		$this->Dump ( $this->_config, $fp, true, "all" );
 	}
 
 
@@ -858,14 +945,13 @@ class SphinxConfig
 	{
 		global $sd_log, $sd_query_log, $sd_read_timeout, $sd_max_children, $sd_pid_file, $sd_max_matches;
 
-		fwrite ( $fp, "\taddress			= ".$this->_sd_address."\n" );
-		fwrite ( $fp, "\tport			= ".$this->_sd_port."\n" );
-		fwrite ( $fp, "\tlog				= $sd_log\n" );
+		fwrite ( $fp, "\tlisten			= {$this->_sd_address}:{$this->_sd_port}\n" );
+		fwrite ( $fp, "\tlog			= $sd_log\n" );
 		fwrite ( $fp, "\tquery_log		= $sd_query_log\n" );
 		fwrite ( $fp, "\tread_timeout	= $sd_read_timeout\n" );
 		fwrite ( $fp, "\tmax_children	= $sd_max_children\n" );
 		fwrite ( $fp, "\tpid_file		= ".$this->_sd_pid_file."\n" );
-		fwrite ( $fp, "\tmax_matches		= $sd_max_matches\n" );
+		fwrite ( $fp, "\tmax_matches	= $sd_max_matches\n" );
 	}
 
 	function WriteSqlSettings ( $fp )
@@ -880,7 +966,7 @@ class SphinxConfig
 	}
 
 
-	function Dump ( $node, $fp, $dynamic_only )
+	function Dump ( $node, $fp, $dynamic_only, $agentid )
 	{
 		global $index_data_path, $agent_address, $agent_port;
 
@@ -895,24 +981,27 @@ class SphinxConfig
 			case "data_path":			fwrite ( $fp, $index_data_path ); return;
 		}
 
-		switch ( strtolower ( $node->nodeName ) )
+		$nodename = strtolower ( $node->nodeName );
+		if ( $nodename=="variant" )
 		{
-			case "variant":
-				fwrite ( $fp, "$node->nodeValue\n" );
-				break;
+			fwrite ( $fp, "$node->nodeValue\n" );
 
-			case "dynamic":
-				if ( !is_null($node->id) )
-				{
-					$variants = ChildrenArray ( $node,"variant" );
-					$this->Dump ( $variants[$this->_counters[$node->id]], $fp, $dynamic_only );
-				}
-				break;
-
-			default:
+		} else if ( $nodename=="dynamic" )
+		{
+			if ( !is_null($node->id) )
+			{
+				$variants = ChildrenArray ( $node,"variant" );
+				$this->Dump ( $variants[$this->_counters[$node->id]], $fp, $dynamic_only, $agentid );
+			}
+		} else if ( strpos ( $nodename, "agent" )===0 )
+		{
+				if ( $agentid==="all" || $nodename=="agent$agentid" )
+					foreach ( ChildrenArray($node) as $child )
+						$this->Dump ( $child, $fp, $dynamic_only, $agentid );
+		} else
+		{
 				foreach ( ChildrenArray($node) as $child )
-					$this->Dump ( $child, $fp, $dynamic_only );
-			break;
+					$this->Dump ( $child, $fp, $dynamic_only, $agentid );
 		}
 	}
 }
@@ -955,7 +1044,7 @@ function EraseDirContents ( $path )
 
 function RunTest ( $test_dir )
 {
-	global $indexer_data_path, $agents, $sd_pid_file;
+	global $indexer_data_path, $agents, $sd_pid_file, $g_id64, $windows;
 
 	$model_file = $test_dir."/model.bin";
 	$conf_dir 	= $test_dir."/Conf";
@@ -965,6 +1054,18 @@ function RunTest ( $test_dir )
 		return;
 
 	$prefix = sprintf ( "testing %s, %s...", $test_dir, $config->Name () );
+
+	if ( $config->Requires("id64") && !$g_id64 )
+	{
+		printf ( "SKIPPING %s, %s - enable id64 to run this test\n", $test_dir, $config->Name () );
+		return;
+	}
+
+	if ( $config->Requires("non-windows") && $windows )
+	{
+		printf ( "SKIPPING %s, %s - use non-Windows system to run this test\n", $test_dir, $config->Name () );
+		return;
+	}
 
 	if ( !CreateDB ( $config->DB_Drop(), $config->DB_Create(), $config->DB_Insert() ) )
 	{
@@ -988,15 +1089,25 @@ function RunTest ( $test_dir )
 	$error = "";
 	$log = ""; // subtest failures log
 	$nsubtests = $config->SubtestCount();
+
+	// config to pid hash, instances to stop
+	// static is only to workaround PHP braindamage, otherwise $stop gets reset (at least on 5.2.2 under win32)
+	static $stop = array();
 	do
 	{
+		// stop them all
+		foreach ( $stop as $conf=>$pid )
+			StopSearchd ( $conf, $pid );
+		$stop = array();
+
+		// do the dew
 		$subtest = $config->SubtestNo()+1;
 		print ( "$prefix $subtest/$nsubtests\r" );
 		$config->WriteReportHeader ( $report );
 
 		$config->SetAgent ( $agents [0] );
-		$config->WriteConfig ( $conf_dir."/"."config_".$config->SubtestNo ().".conf" );
-		$config->WriteConfig ( "config.conf" );
+		$config->WriteConfig ( $conf_dir."/"."config_".$config->SubtestNo ().".conf", "all" );
+		$config->WriteConfig ( "config.conf", "all" );
 
 		EraseDirContents ( $indexer_data_path );
 
@@ -1034,6 +1145,7 @@ function RunTest ( $test_dir )
 		if ( $config->NumAgents () == 1 )
 		{
 			$searchd_ret = StartSearchd ( "config.conf", "error.txt", $sd_pid_file, $error );
+			$stop["config.conf"] = $sd_pid_file;
 
 			if ( $searchd_ret == 1 )
 			{
@@ -1050,15 +1162,18 @@ function RunTest ( $test_dir )
 		else
 			for ( $i = $config->NumAgents () - 1; $i >= 0  && !$searchd_error; $i-- )
 			{
-				$config_file = "config_$i.conf";
-				$pid_file = "searchd$i.pid";
+				static $agent_id = 0;
+				$agent_id++;
+
+				$config_file = "config_".$agent_id.".conf";
+				$pid_file = "searchd_".$agent_id.".pid";
+				$stop[$config_file] = $pid_file;
 
 				$config->SetAgent ( $agents [$i] );
 				$config->SetPIDFile ( $pid_file );
-				$config->WriteConfig ( $config_file );
+				$config->WriteConfig ( $config_file, $i );
 
-				
-				$searchd_ret = StartSearchd ( $config_file, "error_$i.txt", $pid_file, $error );
+				$searchd_ret = StartSearchd ( $config_file, "error_".$agent_id.".txt", $pid_file, $error );
 
 				if ( $searchd_ret == 1 )
 				{
@@ -1085,8 +1200,6 @@ function RunTest ( $test_dir )
 			{
 				if ( !HandleFailure ( $config, $report, "$error\n", $nfailed ) )
 					$log .= "\tsubtest $subtest: query error: $error\n";
-
-				StopSearchd ( "config.conf", $sd_pid_file );
 				continue;
 			}
 		}
@@ -1096,8 +1209,6 @@ function RunTest ( $test_dir )
 			{
 				if ( !HandleFailure ( $config, $report, "$error\n", $nfailed ) )
 					$log .= "\tsubtest $subtest: query error: $error\n";
-
-				StopSearchd ( "config.conf", $sd_pid_file );
 				continue;
 			}
 		}
@@ -1118,14 +1229,11 @@ function RunTest ( $test_dir )
 		}
 
 		$config->SubtestFinished ();
-
-		if ( $config->NumAgents () == 1 )
-			StopSearchd ( "config.conf", $sd_pid_file );
-		else
-			for ( $i = 0; $i < $config->NumAgents (); $i++ )
-				StopSearchd ( "config_$i.conf", "searchd$i.pid" );
 	}
 	while ( $config->CreateNextConfig () );
+
+	foreach ( $stop as $conf=>$pid )
+		StopSearchd ( $conf, $pid );
 
 	fclose ( $report );
 	mysql_close ();
@@ -1143,7 +1251,7 @@ function RunTest ( $test_dir )
 }
 
 //
-// $Id$
+// $Id: helpers.inc 1548 2008-11-03 23:32:42Z shodan $
 //
 
 ?>

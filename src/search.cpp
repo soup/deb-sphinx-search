@@ -1,5 +1,5 @@
 //
-// $Id: search.cpp 1352 2008-07-09 18:30:47Z shodan $
+// $Id: search.cpp 1470 2008-09-30 15:14:26Z shodan $
 //
 
 //
@@ -241,11 +241,7 @@ int main ( int argc, char ** argv )
 		if ( !hIndex.Exists ( "path" ) )
 			sphDie ( "key 'path' not found in index '%s'", sIndexName );
 
-		// configure charset_type
 		CSphString sError;
-		ISphTokenizer * pTokenizer = sphConfTokenizer ( hIndex, sError );
-		if ( !pTokenizer )
-			sphDie ( "index '%s': %s", sIndexName, sError.cstr() );
 
 		// do we want to show document info from database?
 		#if USE_MYSQL
@@ -290,14 +286,6 @@ int main ( int argc, char ** argv )
 		}
 		#endif
 
-		// create dict
-		CSphDict * pDict = sphCreateDictionaryCRC ( hIndex ("morphology"), hIndex.Exists ( "stopwords" ) ? hIndex["stopwords"].cstr () : NULL,
-								hIndex.Exists ( "wordforms" ) ? hIndex ["wordforms"].cstr () : NULL, pTokenizer, sError );
-		assert ( pDict );
-
-		if ( !sError.IsEmpty () )
-			fprintf ( stdout, "WARNING: index '%s': %s\n", sIndexName, sError.cstr() );	
-
 		//////////
 		// search
 		//////////
@@ -307,16 +295,27 @@ int main ( int argc, char ** argv )
 
 		CSphIndex * pIndex = sphCreateIndexPhrase ( hIndex["path"].cstr() );
 		pIndex->SetStar ( hIndex.GetInt("enable_star")!=0 );
+		pIndex->SetWordlistPreload ( hIndex.GetInt("ondisk_dict")==0 );
+
+		CSphString sWarning;
 
 		sError = "could not create index (check that files exist)";
 		for ( ; pIndex; )
 		{
-			const CSphSchema * pSchema = pIndex->Prealloc ( false, NULL );
+			const CSphSchema * pSchema = pIndex->Prealloc ( false, sWarning );
+
 			if ( !pSchema || !pIndex->Preread() )
 			{
 				sError = pIndex->GetLastError ();
 				break;
 			}
+
+			if ( !sWarning.IsEmpty () )
+				fprintf ( stdout, "WARNING: index '%s': %s\n", sIndexName, sWarning.cstr () );
+
+			// handle older index versions (<9)
+			if ( !sphFixupIndexSettings ( pIndex, hIndex, sError ) )
+				sphDie ( "index '%s': %s", sIndexName, sError.cstr() );
 
 			// lookup first timestamp if needed
 			// FIXME! remove this?
@@ -337,7 +336,8 @@ int main ( int argc, char ** argv )
 				}
 			}
 
-			pResult = pIndex->Query ( pTokenizer, pDict, &tQuery );
+			pResult = pIndex->Query ( &tQuery );
+
 			if ( !pResult )
 				sError = pIndex->GetLastError ();
 
@@ -379,7 +379,7 @@ int main ( int argc, char ** argv )
 					if ( tAttr.m_eAttrType & SPH_ATTR_MULTI )
 					{
 						fprintf ( stdout, "(" );
-						int iIndex = tMatch.GetAttr ( tAttr.m_iRowitem );
+						SphAttr_t iIndex = tMatch.GetAttr ( tAttr.m_tLocator );
 						if ( iIndex )
 						{
 							const DWORD * pValues = pResult->m_pMva + iIndex;
@@ -393,9 +393,10 @@ int main ( int argc, char ** argv )
 					{
 						case SPH_ATTR_INTEGER:
 						case SPH_ATTR_ORDINAL:
-						case SPH_ATTR_BOOL:			fprintf ( stdout, "%u", tMatch.GetAttr ( tAttr.m_iBitOffset, tAttr.m_iBitCount ) ); break;
-						case SPH_ATTR_TIMESTAMP:	fprintf ( stdout, "%s", myctime ( tMatch.GetAttr ( tAttr.m_iBitOffset, tAttr.m_iBitCount ) ) ); break;
-						case SPH_ATTR_FLOAT:		fprintf ( stdout, "%f", tMatch.GetAttrFloat ( tAttr.m_iRowitem ) ); break;
+						case SPH_ATTR_BOOL:			fprintf ( stdout, "%u", (DWORD)tMatch.GetAttr ( tAttr.m_tLocator ) ); break;
+						case SPH_ATTR_TIMESTAMP:	fprintf ( stdout, "%s", myctime ( (DWORD)tMatch.GetAttr ( tAttr.m_tLocator ) ) ); break;
+						case SPH_ATTR_FLOAT:		fprintf ( stdout, "%f", tMatch.GetAttrFloat ( tAttr.m_tLocator ) ); break;
+						case SPH_ATTR_BIGINT:		fprintf ( stdout, "%"PRIu64, tMatch.GetAttr ( tAttr.m_tLocator ) ); break;
 						default:					fprintf ( stdout, "(unknown-type-%d)", tAttr.m_eAttrType );
 					}
 				}
@@ -422,7 +423,9 @@ int main ( int argc, char ** argv )
 							LOC_MYSQL_ERROR ( "mysql_fetch_row" );
 
 						for ( int iField=0; iField<(int)pSqlResult->field_count; iField++ )
-							fprintf ( stdout, "\t%s=%s\n", pSqlResult->fields[iField].name, tRow[iField] );
+							fprintf ( stdout, "\t%s=%s\n",
+								( pSqlResult->fields && pSqlResult->fields[iField].name ) ? pSqlResult->fields[iField].name : "(NULL)",
+								tRow[iField] ? tRow[iField] : "(NULL)" );
 
 						mysql_free_result ( pSqlResult );
 						break;
@@ -453,13 +456,11 @@ int main ( int argc, char ** argv )
 		///////////
 
 		SafeDelete ( pIndex );
-		SafeDelete ( pDict );
-		SafeDelete ( pTokenizer );
 	}
 
 	sphShutdownWordforms ();
 }
 
 //
-// $Id: search.cpp 1352 2008-07-09 18:30:47Z shodan $
+// $Id: search.cpp 1470 2008-09-30 15:14:26Z shodan $
 //

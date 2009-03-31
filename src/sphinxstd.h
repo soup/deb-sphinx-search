@@ -1,5 +1,5 @@
 //
-// $Id: sphinxstd.h 1258 2008-05-06 16:05:43Z shodan $
+// $Id: sphinxstd.h 1545 2008-11-03 22:40:09Z shodan $
 //
 
 #ifndef _sphinxstd_
@@ -8,6 +8,10 @@
 #if _MSC_VER>=1400
 #define _CRT_SECURE_NO_DEPRECATE 1
 #define _CRT_NONSTDC_NO_DEPRECATE 1
+#endif
+
+#if (_MSC_VER >= 1000) && !defined(__midl) && defined(_PREFAST_)
+typedef int __declspec("SAL_nokernel") __declspec("SAL_nodriver") __prefast_flag_kernel_driver_mode;
 #endif
 
 #if defined(_MSC_VER) && (_MSC_VER<1400)
@@ -46,6 +50,11 @@
 #define STATIC_ASSERT(_cond,_name)		typedef char STATIC_ASSERT_FAILED_ ## _name [ (_cond) ? 1 : -1 ]
 #define STATIC_SIZE_ASSERT(_type,_size)	STATIC_ASSERT ( sizeof(_type)==_size, _type ## _MUST_BE_ ## _size ## _BYTES )
 
+
+#ifndef __analysis_assume
+#define __analysis_assume(_arg)
+#endif
+
 /////////////////////////////////////////////////////////////////////////////
 // PORTABILITY
 /////////////////////////////////////////////////////////////////////////////
@@ -58,6 +67,7 @@
 #define strcasecmp			strcmpi
 #define strncasecmp			_strnicmp
 #define snprintf			_snprintf
+#define strtoll				_strtoi64
 #define strtoull			_strtoui64
 
 #else
@@ -159,9 +169,14 @@ void			operator delete [] ( void * pPtr );
 // HELPERS
 /////////////////////////////////////////////////////////////////////////////
 
+typedef			bool (* SphDieCallback_t) ( const char * );
+
 /// crash with an error message
 void			sphDie ( const char * sMessage, ... );
 
+/// setup a callback function to call from sphDie() before exit
+/// if callback returns false, sphDie() will not log to stdout
+void			sphSetDieCallback ( SphDieCallback_t pfDieCallback );
 
 /// how much bits do we need for given int
 inline int		sphLog2 ( uint64_t iValue )
@@ -204,6 +219,7 @@ void sphAssert ( const char * sExpr, const char * sFile, int iLine );
 #define Max(a,b)			((a)>(b)?(a):(b))
 #define SafeDelete(_x)		{ if (_x) { delete (_x); (_x) = NULL; } }
 #define SafeDeleteArray(_x)	{ if (_x) { delete [] (_x); (_x) = NULL; } }
+#define SafeRelease(_x)		{ if (_x) { (_x)->Release(); (_x) = NULL; } }
 
 /// swap
 template < typename T > inline void Swap ( T & v1, T & v2 )
@@ -246,6 +262,24 @@ struct SphGreater_T
 		return b < a;
 	}
 };
+
+
+/// generic comparator
+template < typename T, typename C >
+struct SphMemberLess_T
+{
+	const T C::*			m_pMember;
+
+	explicit				SphMemberLess_T ( T C::* pMember )		: m_pMember ( pMember ){}
+	inline bool operator ()	( const C & a, const C & b ) const		{ return ((&a)->*m_pMember) < ((&b)->*m_pMember); }
+};
+
+template < typename T, typename C >
+inline SphMemberLess_T<T,C>
+sphMemberLess ( T C::* pMember)
+{
+	return SphMemberLess_T<T,C> ( pMember );
+}
 
 
 /// generic sort
@@ -291,7 +325,78 @@ template < typename T > void sphSort ( T * pData, int iCount )
 	sphSort ( pData, iCount, SphLess_T<T>() );
 }
 
-//////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+/// member functor, wraps object member access
+template < typename T, typename CLASS >
+struct SphMemberFunctor_T
+{
+	const T CLASS::*	m_pMember;
+
+						SphMemberFunctor_T ( T CLASS::* pMember )	: m_pMember ( pMember ) {}
+	const T &			operator () ( const CLASS & arg ) const		{ return (&arg)->*m_pMember; }
+};
+
+
+/// handy member functor generator
+template < typename T, typename CLASS >
+inline SphMemberFunctor_T < T, CLASS >
+bind ( T CLASS::* ptr )
+{
+	return SphMemberFunctor_T < T, CLASS > ( ptr );
+}
+
+
+/// identity functor
+template < typename T >
+struct SphIdentityFunctor_T
+{
+	const T &			operator () ( const T & arg ) const			{ return arg; }
+};
+
+//////////////////////////////////////////////////////////////////////////
+
+/// generic binary search
+template < typename T, typename U, typename PRED >
+T * sphBinarySearch ( T * pStart, T * pEnd, const PRED & tPred, U tRef )
+{
+	if ( !pStart || pEnd<pStart )
+		return NULL;
+
+	if ( tPred(*pStart)==tRef )
+		return pStart;
+
+	if ( tPred(*pEnd)==tRef )
+		return pEnd;
+
+	while ( pEnd-pStart>1 )
+	{
+		if ( tRef<tPred(*pStart) || tRef>tPred(*pEnd) )
+			break;
+		assert ( tRef>tPred(*pStart) );
+		assert ( tRef<tPred(*pEnd) );
+
+		T * pMid = pStart + (pEnd-pStart)/2;
+		if ( tRef==tPred(*pMid) )
+			return pMid;
+
+		if ( tRef<tPred(*pMid) )
+			pEnd = pMid;
+		else
+			pStart = pMid;
+	}
+	return NULL;
+}
+
+
+/// generic binary search
+template < typename T >
+T * sphBinarySearch ( T * pStart, T * pEnd, T & tRef )
+{
+	return sphBinarySearch ( pStart, pEnd, SphIdentityFunctor_T<T>(), tRef );
+}
+
+//////////////////////////////////////////////////////////////////////////
 
 /// generic vector
 /// (don't even ask why it's not std::vector)
@@ -427,6 +532,7 @@ public:
 		// realloc
 		// FIXME! optimize for POD case
 		T * pNew = new T [ m_iLimit ];
+		__analysis_assume ( m_iLength<=m_iLimit );
 		for ( int i=0; i<m_iLength; i++ )
 			pNew[i] = m_pData[i];
 		delete [] m_pData;
@@ -456,6 +562,26 @@ public:
 	}
 
 public:
+	/// filter unique
+	void Uniq ()
+	{
+		if ( !m_iLength )
+			return;
+
+		Sort ();
+
+		int iSrc = 0, iDst = 0;
+		while ( iSrc<m_iLength )
+		{
+			if ( iDst>0 && m_pData[iDst-1]==m_pData[iSrc] )
+				iSrc++;
+			else
+				m_pData[iDst++] = m_pData[iSrc++];
+		}
+
+		Resize ( iDst );
+	}
+
 	/// default sort
 	void Sort ( int iStart=0, int iEnd=-1 )
 	{
@@ -501,6 +627,7 @@ public:
 		m_iLength = rhs.m_iLength;
 		m_iLimit = rhs.m_iLimit;
 		m_pData = new T [ m_iLimit ];
+		__analysis_assume ( m_iLength<=m_iLimit );
 		for ( int i=0; i<rhs.m_iLength; i++ )
 			m_pData[i] = rhs.m_pData[i];
 
@@ -515,6 +642,28 @@ public:
 		Swap ( m_pData, rhs.m_pData );
 	}
 
+	/// generic binary search
+	/// assumes that the array is sorted in ascending order
+	template < typename U, typename PRED >
+	const T * BinarySearch ( const PRED & tPred, U tRef ) const
+	{
+		return sphBinarySearch ( m_pData, m_pData+m_iLength-1, tPred, tRef );
+	}
+
+	/// generic binary search
+	/// assumes that the array is sorted in ascending order
+	const T * BinarySearch ( T tRef ) const
+	{
+		return sphBinarySearch ( m_pData, m_pData+m_iLength-1, tRef );
+	}
+
+	/// fill with given value
+	void Fill ( const T & rhs )
+	{
+		for ( int i=0; i<m_iLength; i++ )
+			m_pData[i] = rhs;
+	}
+
 protected:
 	int		m_iLength;		///< entries actually used
 	int		m_iLimit;		///< entries allocated
@@ -524,6 +673,9 @@ protected:
 
 #define ARRAY_FOREACH(_index,_array) \
 	for ( int _index=0; _index<_array.GetLength(); _index++ )
+
+#define ARRAY_FOREACH_COND(_index,_array,_cond) \
+	for ( int _index=0; _index<_array.GetLength() && (_cond); _index++ )
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -538,6 +690,7 @@ protected:
 		KEY				m_tKey;				///< key, owned by the hash
 		T 				m_tValue;			///< data, owned by the hash
 		HashEntry_t *	m_pNextByHash;		///< next entry in hash list
+		HashEntry_t *	m_pPrevByOrder;		///< prev entry in the insertion order
 		HashEntry_t *	m_pNextByOrder;		///< next entry in the insertion order
 	};
 
@@ -629,6 +782,7 @@ public:
 		pEntry->m_tKey = tKey;
 		pEntry->m_tValue = tValue;
 		pEntry->m_pNextByHash = NULL;
+		pEntry->m_pPrevByOrder = NULL;
 		pEntry->m_pNextByOrder = NULL;
 
 		*ppEntry = pEntry;
@@ -641,10 +795,55 @@ public:
 			assert ( !m_pLastByOrder->m_pNextByOrder );
 			assert ( !pEntry->m_pNextByOrder );
 			m_pLastByOrder->m_pNextByOrder = pEntry;
+			pEntry->m_pPrevByOrder = m_pLastByOrder;
 		}
 		m_pLastByOrder = pEntry;
 
 		m_iLength++;
+		return true;
+	}
+
+	/// delete an entry
+	bool Delete ( const KEY & tKey )
+	{
+		unsigned int uHash = ( (unsigned int) HASHFUNC::Hash ( tKey ) ) % LENGTH;
+		HashEntry_t * pEntry = m_dHash [ uHash ];
+
+		HashEntry_t * pPrevEntry = NULL;
+		HashEntry_t * pToDelete = NULL;
+		while ( pEntry )
+		{
+			if ( pEntry->m_tKey==tKey )
+			{
+				pToDelete = pEntry;
+				if ( pPrevEntry )
+					pPrevEntry->m_pNextByHash = pEntry->m_pNextByHash;
+				else
+					m_dHash [ uHash ] = pEntry->m_pNextByHash;
+
+				break;
+			}
+
+			pPrevEntry = pEntry;
+			pEntry = pEntry->m_pNextByHash;
+		}
+
+		if ( !pToDelete )
+			return false;
+
+		if ( pToDelete->m_pPrevByOrder )
+			pToDelete->m_pPrevByOrder->m_pNextByOrder = pToDelete->m_pNextByOrder;
+		else
+			m_pFirstByOrder = pToDelete->m_pNextByOrder;
+
+		if ( pToDelete->m_pNextByOrder )
+			pToDelete->m_pNextByOrder->m_pPrevByOrder = pToDelete->m_pPrevByOrder;
+		else
+			m_pLastByOrder = pToDelete->m_pPrevByOrder;
+
+		SafeDelete ( pToDelete );
+		--m_iLength;
+
 		return true;
 	}
 
@@ -902,8 +1101,8 @@ public:
 		{
 			const char * sStart = m_sValue;
 			const char * sEnd = m_sValue + strlen(m_sValue) - 1;
-			while ( sStart<=sEnd && isspace(*sStart) ) sStart++;
-			while ( sStart<=sEnd && isspace(*sEnd) ) sEnd--;
+			while ( sStart<=sEnd && isspace((unsigned char)*sStart) ) sStart++;
+			while ( sStart<=sEnd && isspace((unsigned char)*sEnd) ) sEnd--;
 			memmove ( m_sValue, sStart, sEnd-sStart+1 );
 			m_sValue [ sEnd-sStart+1 ] = '\0';
 		}
@@ -918,11 +1117,12 @@ inline void Swap ( CSphString & v1, CSphString & v2 )
 
 /////////////////////////////////////////////////////////////////////////////
 
-/// immutable string/int variant list proxy
+/// immutable string/int/float variant list proxy
 struct CSphVariant : public CSphString
 {
 protected:
 	int				m_iValue;
+	float			m_fValue;
 
 public:
 	CSphVariant *	m_pNext;
@@ -933,6 +1133,7 @@ public:
 	CSphVariant ()
 		: CSphString ()
 		, m_iValue ( 0 )
+		, m_fValue ( 0.0f )
 		, m_pNext ( NULL )
 		, m_bTag ( false )
 	{
@@ -942,6 +1143,7 @@ public:
 	CSphVariant ( const char * sString )
 		: CSphString ( sString )
 		, m_iValue ( atoi ( m_sValue ) )
+		, m_fValue ( (float)atof ( m_sValue ) )
 		, m_pNext ( NULL )
 	{
 	}
@@ -950,6 +1152,7 @@ public:
 	CSphVariant ( const CSphVariant & rhs )
 		: CSphString ()
 		, m_iValue ( 0 )
+		, m_fValue ( 0.0f )
 		, m_pNext ( NULL )
 	{
 		*this = rhs;
@@ -968,6 +1171,12 @@ public:
 		return m_iValue;
 	}
 
+	/// float value getter
+	float floatval () const
+	{
+		return m_fValue;
+	}
+
 	/// default copy operator
 	const CSphVariant & operator = ( const CSphVariant & rhs )
 	{
@@ -977,6 +1186,7 @@ public:
 
 		CSphString::operator = ( rhs );
 		m_iValue = rhs.m_iValue;
+		m_fValue = rhs.m_fValue;
 
 		return *this;
 	}
@@ -1000,8 +1210,46 @@ protected:
 	T *				m_pPtr;
 };
 
+//////////////////////////////////////////////////////////////////////////
+
+/// refcounted base
+struct ISphRefcounted : public ISphNoncopyable
+{
+protected:
+					ISphRefcounted () : m_iRefCount ( 1 ) {}
+	virtual			~ISphRefcounted () {}
+
+public:
+	void			AddRef () const		{ m_iRefCount++; }
+	void			Release () const	{ --m_iRefCount; assert ( m_iRefCount>=0 ); if ( m_iRefCount==0 ) delete this; }
+
+protected:
+	mutable int		m_iRefCount;
+};
+
+
+/// automatic pointer wrapper for refcounted objects
+template < typename T >
+class CSphRefcountedPtr
+{
+public:
+	explicit		CSphRefcountedPtr ( T * pPtr )	{ m_pPtr = pPtr; }
+					~CSphRefcountedPtr ()			{ if ( m_pPtr ) m_pPtr->Release(); }
+
+	T *				Ptr () const					{ return m_pPtr; }
+	T *				operator -> () const			{ return m_pPtr; }
+	bool			operator ! () const				{ return m_pPtr==NULL; }
+
+public:
+	CSphRefcountedPtr<T> &	operator = ( T * pPtr )								{ if ( m_pPtr ) m_pPtr->Release(); m_pPtr = pPtr; return *this; }
+	CSphRefcountedPtr<T> &	operator = ( const CSphRefcountedPtr<T> & rhs )		{ if ( rhs.m_pPtr ) rhs.m_pPtr->AddRef(); if ( m_pPtr ) m_pPtr->Release(); m_pPtr = rhs.m_pPtr; return *this; }
+
+protected:
+	T *				m_pPtr;
+};
+
 #endif // _sphinxstd_
 
 //
-// $Id: sphinxstd.h 1258 2008-05-06 16:05:43Z shodan $
+// $Id: sphinxstd.h 1545 2008-11-03 22:40:09Z shodan $
 //
