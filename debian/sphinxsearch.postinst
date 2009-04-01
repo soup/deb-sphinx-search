@@ -8,9 +8,9 @@ set -e
 case "$1" in
   configure)
 
-  DATADIR=/var/lib/sphinx-search
-  RUNDIR=/var/run/sphinx-search
-  LOGDIR=/var/log/sphinx-search
+  DATADIR=/var/lib/sphinxsearch
+  RUNDIR=/var/run/sphinxsearch
+  LOGDIR=/var/log/sphinxsearch
   user=sphinx
 
   if [ -z "$2" ]; then

@@ -1,14 +1,14 @@
-Source: sphinx-search
+Source: sphinxsearch
 Section: utils
 Priority: extra
-Maintainer: John Leach <john@brightbox.co.uk>
+Maintainer: Lukas Fittl <lukas@fittl.com>
 Build-Depends: debhelper (>= 6), autotools-dev, g++ (>= 4), libmysqlclient15-dev, libpq-dev, cdbs (>= 0.4)
 Standards-Version: 3.7.3
 Homepage: http://www.sphinxsearch.com
-XS-Vcs-git: git://github.com/johnl/deb-sphinx-search/tree/master
-XS-Vcs-browser: http://github.com/johnl/deb-sphinx-search/tree/master
+XS-Vcs-git: git://github.com/lfittl/deb-sphinx-search/tree/master
+XS-Vcs-browser: http://github.com/lfittl/deb-sphinx-search/tree/master
 
-Package: sphinx-search
+Package: sphinxsearch
 Section: utils
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, adduser

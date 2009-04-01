@@ -1,3 +1,12 @@
+sphinxsearch (0.9.9rc1-1) lenny; urgency=low
+
+  * New upstream release candidate.
+  * Update maintainer, package VCS location
+  * Takeover changes from Debian ITP #456227
+    - Rename package to sphinxsearch (without hyphen)
+
+ -- Lukas Fittl <lukas@fittl.com>  Tue, 31 Mar 2009 12:02:10 +0000
+
 sphinx-search (0.9.8.1-1bbox1) intrepid; urgency=low
 
   * Initial release
