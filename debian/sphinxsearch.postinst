@@ -21,6 +21,7 @@ case "$1" in
     chown $user:$user $DATADIR/data
     chown $user:$user $RUNDIR
     chown $user:adm $LOGDIR
+    setcap cap_ipc_lock+eip /usr/bin/searchd
   fi
 esac
 

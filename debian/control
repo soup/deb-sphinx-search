@@ -11,7 +11,7 @@ XS-Vcs-browser: http://github.com/lfittl/deb-sphinx-search/tree/master
 Package: sphinxsearch
 Section: utils
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, adduser
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, libcap2-bin
 Description: Free open-source SQL full-text search engine
  Sphinx is generally a standalone search engine, meant to provide fast,
  size-efficient and relevant fulltext search functions to other applications.
