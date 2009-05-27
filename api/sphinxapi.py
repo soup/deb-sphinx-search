@@ -1,5 +1,5 @@
 #
-# $Id: sphinxapi.py 1562 2008-11-12 10:40:12Z xale $
+# $Id: sphinxapi.py 1775 2009-04-06 22:15:58Z shodan $
 #
 # Python version of Sphinx searchd client (Python API)
 #
@@ -16,6 +16,7 @@
 import sys
 import select
 import socket
+import re
 from struct import *
 
 
@@ -953,6 +954,9 @@ class SphinxClient:
 		self._socket.close()
 		self._socket = None
 	
+	def EscapeString(self, string):
+		return re.sub(r"([=\(\)|\-!@~\"&/\\\^\$\=])", r"\\\1", string)
+
 #
-# $Id: sphinxapi.py 1562 2008-11-12 10:40:12Z xale $
+# $Id: sphinxapi.py 1775 2009-04-06 22:15:58Z shodan $
 #

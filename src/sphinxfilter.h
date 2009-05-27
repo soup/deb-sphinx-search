@@ -1,5 +1,5 @@
 //
-// $Id: sphinxfilter.h 1543 2008-10-31 23:05:56Z shodan $
+// $Id: sphinxfilter.h 1609 2008-12-12 01:50:55Z shodan $
 //
 
 //
@@ -14,7 +14,6 @@
 #ifndef _sphinxfilter_
 #define _sphinxfilter_
 
-#include "sphinxstd.h"
 #include "sphinx.h"
 
 struct ISphFilter
@@ -49,5 +48,5 @@ ISphFilter * sphJoinFilters ( ISphFilter *, ISphFilter * );
 #endif // _sphinxfilter_
 
 //
-// $Id: sphinxfilter.h 1543 2008-10-31 23:05:56Z shodan $
+// $Id: sphinxfilter.h 1609 2008-12-12 01:50:55Z shodan $
 //

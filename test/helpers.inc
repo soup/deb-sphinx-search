@@ -1,7 +1,7 @@
 <?php
 
 //
-// $Id: helpers.inc 1548 2008-11-03 23:32:42Z shodan $
+// $Id: helpers.inc 1776 2009-04-06 22:59:28Z shodan $
 //
 
 ini_set ( "display_errors", 1 );
@@ -353,21 +353,25 @@ class SphinxConfig
 	function Load ( $config_file )
 	{
 		// load the file
-		$xml = new DOMDocument ( "1.0", "utf-8" );
-		if ( !$xml->load ( $config_file ) )
+		$doc = new DOMDocument ( "1.0", "utf-8" );
+		if ( !$doc->load ( $config_file ) )
 			return false;
 
 		// check for proper root node
-		if ( !$xml->hasChildNodes() )
+		if ( !$doc->hasChildNodes() )
 			return false;
 
-		$xml = $xml->childNodes->item(0);
+		$xml = $doc->childNodes->item(0);
 		if ( strtolower($xml->nodeName)!="test" )
 			return false;
 
 		$custom = GetFirstChild ( $xml, "custom_test" );
 		if ( $custom )
+		{
 			$this->_custom_test = $custom->nodeValue;
+			if ( $doc->encoding != 'utf-8' )
+				$this->_custom_test = iconv ( 'utf-8', $doc->encoding, $this->_custom_test );
+		}
 
 		// extract indexer run params
 		$indexer_run = GetFirstChild ( $xml, "indexer" );
@@ -474,6 +478,8 @@ class SphinxConfig
 				$res["select"] = $q->getAttribute("select");
 				$res["id_range"] = $this->ParseRange ( $q->getAttribute("id_range") );
 				$res["index_weights"] = $this->ParseIndexWeights ( $q->getAttribute("index_weights") );
+				$res["roundoff"] = $q->getAttribute("roundoff");
+				$res["expect_error"] = $q->getAttribute("expect_error");
 
 				// add query
 				$this->_queries[] = $res;
@@ -580,8 +586,11 @@ class SphinxConfig
 					}
 
 	            	$results = $cl->Query ( $query, $my_index );
-					if ( @$qinfo["resarray"] )
-						$results ["resarray"] = 1;
+					if ( is_array($results) )
+					{
+						$results["resarray"] = (int)@$qinfo["resarray"];
+						$results["roundoff"] = (int)@$qinfo["roundoff"];
+					}
                 }
 				else
 				{
@@ -594,6 +603,18 @@ class SphinxConfig
 					$bOk = TRUE;
 					$results ["query"] = $query;
         			array_push ( $query_results, $results );
+
+            	} else if ( @$qinfo["expect_error"] && !$cl->IsConnectError() )
+            	{
+            		$bOk = true;
+            		array_push ( $query_results, array (
+            			"query" => $query,
+            			"error" => $cl->GetLastError(),
+            			"warning" => "",
+            			"total" => 0,
+            			"total_found" => 0,
+            			"time" => 0 ) );
+
             	} else
 				{
 					if ( !$cl->IsConnectError() )
@@ -701,21 +722,33 @@ class SphinxConfig
 	}
 
 
-	function CompareResultSetFixup ( &$set )
+	function CompareResultSetFixup ( &$set, $roundoff )
 	{
 		if ( !is_array($set) )
 			return;
 
-		unset ( $set["time"] );
-		unset ( $set["warning"] );
-		unset ( $set["status"] );
-		unset ( $set["fields"] );
+		if ( $roundoff && !@$set["resarray"] ) // FIXME! support resarray too
+			foreach ( $set["attrs"] as $name=>$type )
+				if ( $type==SPH_ATTR_FLOAT )
+		{
+			foreach ( $set["matches"] as $id=>$match )
+				$set["matches"][$id]["attrs"][$name] = sprintf ( "%.{$roundoff}f",
+					$set["matches"][$id]["attrs"][$name] );
+		}
+
+		foreach ( preg_split ( "/\\W+/", "time warning status fields resarray roundoff" ) as $key )
+			unset ( $set[$key] );
 	}
 
 	function CompareResultSets ( $set1, $set2 )
 	{
-		$this->CompareResultSetFixup ( $set1 );
-		$this->CompareResultSetFixup ( $set2 );
+		$roundoff = 0;
+		if ( isset($set1["roundoff"]) ) $roundoff = $set1["roundoff"];
+		if ( isset($set2["roundoff"]) ) $roundoff = $set2["roundoff"];
+
+		$this->CompareResultSetFixup ( $set1, $roundoff );
+		$this->CompareResultSetFixup ( $set2, $roundoff );
+
 		return $set1==$set2;
 	}
 
@@ -762,6 +795,8 @@ class SphinxConfig
 			$str .= "Sort: expr: ".$qinfo["sortby"]."\n";
 
 		$str .= "Query '$result[query]': retrieved $result[total_found] of $result[total] matches in $result[time] sec.\n";
+		if ( $result["error"] )
+			$str .= "Error: $result[error]\n";
 		if ( $result["warning"] )
 			$str .= "Warning: $result[warning]\n";
 
@@ -1055,16 +1090,18 @@ function RunTest ( $test_dir )
 
 	$prefix = sprintf ( "testing %s, %s...", $test_dir, $config->Name () );
 
+	$res_skipped = array ( "tests_total"=>0, "tests_failed"=>0 );
+
 	if ( $config->Requires("id64") && !$g_id64 )
 	{
 		printf ( "SKIPPING %s, %s - enable id64 to run this test\n", $test_dir, $config->Name () );
-		return;
+		return $res_skipped;
 	}
 
 	if ( $config->Requires("non-windows") && $windows )
 	{
 		printf ( "SKIPPING %s, %s - use non-Windows system to run this test\n", $test_dir, $config->Name () );
-		return;
+		return $res_skipped;
 	}
 
 	if ( !CreateDB ( $config->DB_Drop(), $config->DB_Create(), $config->DB_Insert() ) )
@@ -1251,7 +1288,7 @@ function RunTest ( $test_dir )
 }
 
 //
-// $Id: helpers.inc 1548 2008-11-03 23:32:42Z shodan $
+// $Id: helpers.inc 1776 2009-04-06 22:59:28Z shodan $
 //
 
 ?>

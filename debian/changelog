@@ -1,3 +1,9 @@
+sphinxsearch (0.9.9rc2-1) lenny; urgency=low
+
+  * New upstream release candidate.
+
+ -- Lukas Fittl <lukas@fittl.com>  Wed, 27 May 2009 14:34:20 +0000
+
 sphinxsearch (0.9.9rc1-1) lenny; urgency=low
 
   * New upstream release candidate.
