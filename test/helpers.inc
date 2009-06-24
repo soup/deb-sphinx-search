@@ -1,7 +1,7 @@
 <?php
 
 //
-// $Id: helpers.inc 1776 2009-04-06 22:59:28Z shodan $
+// $Id: helpers.inc 1845 2009-06-20 22:12:50Z shodan $
 //
 
 ini_set ( "display_errors", 1 );
@@ -196,7 +196,7 @@ class SphinxConfig
 		$this->_indexer_runs	= array ();
 		$this->_db_create		= array ();
 		$this->_db_drop			= array ();
-		$this->_db_create		= array ();
+		$this->_db_insert		= array ();
 		$this->_num_agents		= 1;
 		$this->_subtest 		= 0;
 		$this->_subtestcount	= 0;
@@ -1288,7 +1288,7 @@ function RunTest ( $test_dir )
 }
 
 //
-// $Id: helpers.inc 1776 2009-04-06 22:59:28Z shodan $
+// $Id: helpers.inc 1845 2009-06-20 22:12:50Z shodan $
 //
 
 ?>

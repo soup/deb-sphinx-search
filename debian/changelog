@@ -1,3 +1,9 @@
+sphinxsearch (0.9.9rc2+r1864-1) lenny; urgency=low
+
+  * Updated to r1864 of upstream release branch.
+
+ -- Lukas Fittl <app@dev.hw.soup.io>  Tue, 23 Jun 2009 15:00:39 +0000
+
 sphinxsearch (0.9.9rc2-1) lenny; urgency=low
 
   * New upstream release candidate.

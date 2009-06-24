@@ -1,5 +1,5 @@
 //
-// $Id: sphinxfilter.h 1609 2008-12-12 01:50:55Z shodan $
+// $Id: sphinxfilter.h 1848 2009-06-21 13:46:56Z shodan $
 //
 
 //
@@ -41,12 +41,11 @@ struct ISphFilter
 	virtual ISphFilter * Join ( ISphFilter * pFilter );
 };
 
-ISphFilter * sphCreateFilter ( CSphFilterSettings &, const CSphSchema &, const DWORD * pMva );
-ISphFilter * sphCreateFilters ( CSphVector<CSphFilterSettings> &, const CSphSchema &, const DWORD * pMva );
+ISphFilter * sphCreateFilter ( CSphFilterSettings &, const CSphSchema &, const DWORD * pMva, CSphString & sError );
 ISphFilter * sphJoinFilters ( ISphFilter *, ISphFilter * );
 
 #endif // _sphinxfilter_
 
 //
-// $Id: sphinxfilter.h 1609 2008-12-12 01:50:55Z shodan $
+// $Id: sphinxfilter.h 1848 2009-06-21 13:46:56Z shodan $
 //

@@ -1,5 +1,5 @@
 //
-// $Id: searchd.cpp 1774 2009-04-06 22:08:27Z shodan $
+// $Id: searchd.cpp 1848 2009-06-21 13:46:56Z shodan $
 //
 
 //
@@ -1271,17 +1271,34 @@ ListenerDesc_t ParseListener ( const char * sSpec )
 		return tRes;
 	}
 
-	// two or three parts. host name, port name, and optional protocol type
-	if ( iParts==3 )
-		tRes.m_eProto = ProtoByName ( sParts[2] );
+	// two or three parts
+	int iPart0 = 0;
+	if ( !sParts[0].IsEmpty() )
+		iPart0 = atol ( sParts[0].cstr() );
 
-	tRes.m_iPort = atol ( sParts[1].cstr() );
-	CheckPort ( tRes.m_iPort );
+	if ( IsPortInRange(iPart0) )
+	{
+		// 1st part is a valid port number; must be port:proto
+		if ( iParts!=2 )
+			sphFatal ( "invalid listen format (expected port:proto, got extra trailing part)" );
 
-	tRes.m_uIP = sParts[0].IsEmpty()
-		? htonl(INADDR_ANY)
-		: sphGetAddress ( sParts[0].cstr(), GETADDR_STRICT );
+		tRes.m_uIP = htonl ( INADDR_ANY );
+		tRes.m_iPort = iPart0;
+		tRes.m_eProto = ProtoByName ( sParts[1] );
 
+	} else
+	{
+		// 1st part must be a host name; must be host:port[:proto]
+		if ( iParts==3 )
+			tRes.m_eProto = ProtoByName ( sParts[2] );
+
+		tRes.m_iPort = atol ( sParts[1].cstr() );
+		CheckPort ( tRes.m_iPort );
+
+		tRes.m_uIP = sParts[0].IsEmpty()
+			? htonl(INADDR_ANY)
+			: sphGetAddress ( sParts[0].cstr(), GETADDR_STRICT );
+	}
 	return tRes;
 }
 
@@ -3878,8 +3895,19 @@ int64_t sphCpuTimer ()
 	if ( !g_bCpuStats )
 		return 0;
 
+#if defined(CLOCK_PROCESS_CPUTIME_ID)
+// CPU time (user+sys), Linux style
+#define LOC_CLOCK CLOCK_PROCESS_CPUTIME_ID
+#elif defined(CLOCK_PROF)
+// CPU time (user+sys), FreeBSD style
+#define LOC_CLOCK CLOCK_PROF
+#else
+// POSIX fallback (wall time)
+#define LOC_CLOCK CLOCK_REALTIME
+#endif
+
 	struct timespec tp;
-	if ( clock_gettime ( CLOCK_PROCESS_CPUTIME_ID, &tp ) )
+	if ( clock_gettime ( LOC_CLOCK, &tp ) )
 		return 0;
 
 	return tp.tv_sec*1000000 + tp.tv_nsec/1000;
@@ -4562,6 +4590,7 @@ struct SqlNode_t
 	int						m_iEnd;
 	CSphString				m_sValue;
 	int64_t					m_iValue;
+	float					m_fValue;
 	CSphVector<SphAttr_t>	m_dValues;
 
 	SqlNode_t() : m_iValue ( 0 ) {}
@@ -5695,7 +5724,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 			// rows
 			char sRowBuffer[4096];
-			const char * sRowMax = sRowBuffer + sizeof(sRowBuffer);
+			const char * sRowMax = sRowBuffer + sizeof(sRowBuffer) - 4; // safety gap
 
 			for ( int iMatch = pRes->m_iOffset; iMatch < pRes->m_iOffset + pRes->m_iCount; iMatch++ )
 			{
@@ -5791,7 +5820,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 			// row
 			char sRowBuffer[4096];
-			const char * sRowMax = sRowBuffer + sizeof(sRowBuffer);
+			const char * sRowMax = sRowBuffer + sizeof(sRowBuffer) - 4; // safety gap
 
 			int iLen;
 			char * p = sRowBuffer;
@@ -5826,7 +5855,7 @@ void HandleClientMySQL ( int iSock, const char * sClientIP, int iPipeFD )
 
 			// send rows
 			char sRowBuffer[4096];
-			const char * sRowMax = sRowBuffer + sizeof(sRowBuffer);
+			const char * sRowMax = sRowBuffer + sizeof(sRowBuffer) - 4; // safety gap
 
 			for ( int iRow=0; iRow<dStatus.GetLength(); iRow+=2 )
 			{
@@ -8420,5 +8449,5 @@ int main ( int argc, char **argv )
 }
 
 //
-// $Id: searchd.cpp 1774 2009-04-06 22:08:27Z shodan $
+// $Id: searchd.cpp 1848 2009-06-21 13:46:56Z shodan $
 //
